@@ -39,18 +39,17 @@ def compute_gae(
         else:
             next_value = values[t + 1].detach()
 
-        delta = (
-            rewards[t]
-            + gamma * next_value
-            - values[t].detach()
-        )
+        delta = rewards[t] + gamma * next_value - values[t].detach()
 
         gae = delta + gamma * lam * gae
         advantages[t] = gae
 
     return advantages
 
-def plot_training_curve(epoch_rewards, explained_variances=None, save_path="reward_per_epoch.png"):
+
+def plot_training_curve(
+    epoch_rewards, explained_variances=None, save_path="reward_per_epoch.png"
+):
     epochs = range(len(epoch_rewards))
     figure, reward_axis = plt.subplots()
     reward_axis.plot(epochs, epoch_rewards, label="Reward")

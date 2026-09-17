@@ -4,13 +4,14 @@ import torch
 from common import plot_training_curve
 from model import SimpleActorPolicy
 
+NUM_EPOCHS = 10000
+BATCH_SIZE = 1024
+GAMMA = 0.99
 
 env = gym.make("LunarLander-v3")
 policy = SimpleActorPolicy()
 optimizer = torch.optim.Adam(policy.parameters(), lr=1e-2)
 
-NUM_EPOCHS = 10000
-BATCH_SIZE = 1024
 epoch_rewards = []
 
 for epoch in range(NUM_EPOCHS):
@@ -42,7 +43,7 @@ for epoch in range(NUM_EPOCHS):
         G = 0.0
 
         for reward in reversed(rewards):
-            G = reward + 0.99 * G
+            G = reward + GAMMA * G
             returns.append(G)
 
         returns.reverse()

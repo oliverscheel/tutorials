@@ -10,15 +10,13 @@ CLIP_EPS = 0.2
 PPO_EPOCHS = 4
 MINIBATCH_SIZE = 512
 ENTROPY_COEF = 0.01
-
+NUM_EPOCHS = 10000
+BATCH_SIZE = 4096
 
 env = gym.make("LunarLander-v3")
 policy = ActorCriticPolicy()
 
 optimizer = torch.optim.Adam(policy.parameters(), lr=3e-4)
-
-NUM_EPOCHS = 10000
-BATCH_SIZE = 4096
 
 epoch_rewards = []
 epoch_explained_variances = []
@@ -46,9 +44,12 @@ for epoch in range(NUM_EPOCHS):
         terminated = truncated = False
 
         while not (terminated or truncated):
-            observations.append(torch.as_tensor(observation, dtype=torch.float32))
+            observations.append(
+                torch.as_tensor(observation, dtype=torch.float32)
+            )
 
-            action, log_prob, value = policy.sample_action(observation)
+            with torch.no_grad():
+                action, log_prob, value = policy.sample_action(observation)
 
             observation, reward, terminated, truncated, _ = env.step(action)
 
@@ -81,7 +82,7 @@ for epoch in range(NUM_EPOCHS):
 
         values_tensor = torch.stack(values)
         value_targets = values_tensor.detach() + advantages
-    
+
         batch_log_probs.extend(log_probs)
         batch_advantages.extend(advantages)
         batch_values.extend(values)
@@ -96,16 +97,15 @@ for epoch in range(NUM_EPOCHS):
     advantages = torch.stack(batch_advantages).detach()
     values = torch.stack(batch_values)
     value_targets = torch.stack(batch_value_targets).detach()
-    explained_variance = compute_explained_variance(values.detach(), value_targets)
+    explained_variance = compute_explained_variance(
+        values.detach(),
+        value_targets,
+    )
 
     observations = torch.stack(batch_observations)
     actions = torch.stack(batch_actions)
 
-    advantages = (
-        advantages - advantages.mean()
-    ) / (
-        advantages.std() + 1e-8
-    )
+    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     N = len(actions)
 
@@ -126,9 +126,7 @@ for epoch in range(NUM_EPOCHS):
                 mb_actions,
             )
 
-            ratio = torch.exp(
-                new_log_probs - mb_old_log_probs
-            )
+            ratio = torch.exp(new_log_probs - mb_old_log_probs)
 
             surrogate1 = ratio * mb_advantages
 
@@ -146,27 +144,32 @@ for epoch in range(NUM_EPOCHS):
                 surrogate2,
             ).mean()
 
-            value_loss = (
-                (new_values - mb_value_targets) ** 2
-            ).mean()
+            value_loss = ((new_values - mb_value_targets) ** 2).mean()
 
             entropy_loss = entropy.mean()
             loss = policy_loss + 0.5 * value_loss - ENTROPY_COEF * entropy_loss
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                policy.parameters(), 0.5
-            )
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), 0.5)
             optimizer.step()
 
     epoch_rewards.append(sum(episode_rewards) / len(episode_rewards))
     epoch_explained_variances.append(explained_variance)
 
     if epoch % (NUM_EPOCHS // 100) == 0:
-        print(f"Epoch {epoch}, policy loss: {policy_loss.item():.3f}, value loss: {value_loss.item():.3f}, entropy_loss: {entropy_loss.item():.3f}")
+        print(
+            "Epoch "
+            f"{epoch}, policy loss: {policy_loss.item():.3f}, "
+            f"value loss: {value_loss.item():.3f}, "
+            f"entropy_loss: {entropy_loss.item():.3f}"
+        )
         print(f"Episode reward: {sum(episode_rewards) / len(episode_rewards)}")
         print(f"Explained variance: {explained_variance:.3f}")
-        plot_training_curve(epoch_rewards, epoch_explained_variances, save_path="plots/ppo.png")
+        plot_training_curve(
+            epoch_rewards,
+            epoch_explained_variances,
+            save_path="plots/ppo.png",
+        )
 
 env.close()

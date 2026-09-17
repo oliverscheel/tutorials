@@ -6,15 +6,13 @@ from model import ActorCriticPolicy
 
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
-
+NUM_EPOCHS = 10000
+BATCH_SIZE = 4096
 
 env = gym.make("LunarLander-v3")
 policy = ActorCriticPolicy()
+optimizer = torch.optim.Adam(policy.parameters(), lr=3e-4)
 
-optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
-
-NUM_EPOCHS = 10000
-BATCH_SIZE = 4096
 epoch_rewards = []
 epoch_explained_variances = []
 
@@ -68,7 +66,7 @@ for epoch in range(NUM_EPOCHS):
 
         values_tensor = torch.stack(values)
         value_targets = values_tensor.detach() + advantages
-    
+
         batch_log_probs.extend(log_probs)
         batch_advantages.extend(advantages)
         batch_values.extend(values)
@@ -80,16 +78,15 @@ for epoch in range(NUM_EPOCHS):
     advantages = torch.stack(batch_advantages)
     values = torch.stack(batch_values)
     value_targets = torch.stack(batch_value_targets)
-    explained_variance = compute_explained_variance(values.detach(), value_targets)
-
-    advantages = (
-        advantages - advantages.mean()
-    ) / (
-        advantages.std() + 1e-8
+    explained_variance = compute_explained_variance(
+        values.detach(),
+        value_targets,
     )
 
-    policy_loss = -(log_probs * advantages).mean()
-    value_loss = ((values - value_targets) ** 2).mean()
+    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+    policy_loss = -(log_probs * advantages.detach()).mean()
+    value_loss = ((values - value_targets.detach()) ** 2).mean()
 
     loss = policy_loss + 0.5 * value_loss
 
@@ -102,9 +99,17 @@ for epoch in range(NUM_EPOCHS):
     epoch_explained_variances.append(explained_variance)
 
     if epoch % (NUM_EPOCHS // 100) == 0:
-        print(f"Epoch {epoch}, policy loss: {policy_loss.item():.3f}, value loss: {value_loss.item():.3f}")
+        print(
+            "Epoch "
+            f"{epoch}, policy loss: {policy_loss.item():.3f}, "
+            f"value loss: {value_loss.item():.3f}"
+        )
         print(f"Episode reward: {sum(episode_rewards) / len(episode_rewards)}")
         print(f"Explained variance: {explained_variance:.3f}")
-        plot_training_curve(epoch_rewards, epoch_explained_variances, save_path="plots/reinforce_baseline.png")
+        plot_training_curve(
+            epoch_rewards,
+            epoch_explained_variances,
+            save_path="plots/reinforce_baseline.png",
+        )
 
 env.close()

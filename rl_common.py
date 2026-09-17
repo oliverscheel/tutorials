@@ -38,20 +38,20 @@ class ActorCriticPolicy(nn.Module):
         super().__init__()
 
         self.encoder = nn.Sequential(
-            init_layer(nn.Linear(observation_dim, hidden_dim), std=2 ** 0.5),
+            init_layer(nn.Linear(observation_dim, hidden_dim), std=2**0.5),
             nn.Tanh(),
-            init_layer(nn.Linear(hidden_dim, hidden_dim), std=2 ** 0.5),
+            init_layer(nn.Linear(hidden_dim, hidden_dim), std=2**0.5),
             nn.Tanh(),
         )
 
         self.actor = nn.Sequential(
-            init_layer(nn.Linear(hidden_dim, 64), std=2 ** 0.5),
+            init_layer(nn.Linear(hidden_dim, 64), std=2**0.5),
             nn.Tanh(),
             init_layer(nn.Linear(64, action_dim), std=0.01),
         )
 
         self.critic = nn.Sequential(
-            init_layer(nn.Linear(hidden_dim, 64), std=2 ** 0.5),
+            init_layer(nn.Linear(hidden_dim, 64), std=2**0.5),
             nn.Tanh(),
             init_layer(nn.Linear(64, 1), std=1.0),
         )
@@ -84,7 +84,9 @@ def compute_explained_variance(predictions, targets):
     return (1 - torch.var(targets - predictions) / target_variance).item()
 
 
-def plot_training_curve(epoch_rewards, explained_variances=None, save_path="reward_per_epoch.png"):
+def plot_training_curve(
+    epoch_rewards, explained_variances=None, save_path="reward_per_epoch.png"
+):
     epochs = range(len(epoch_rewards))
     figure, reward_axis = plt.subplots()
     reward_axis.plot(epochs, epoch_rewards, label="Reward")

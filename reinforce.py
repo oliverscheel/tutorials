@@ -1,48 +1,17 @@
 import gymnasium as gym
-import matplotlib.pyplot as plt
 import torch
-from torch import nn
-from torch.distributions import Categorical
 
-
-class CartPolePolicy(nn.Module):
-    """A small actor network for CartPole."""
-
-    def __init__(self):
-        super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(8, 64),
-            nn.Tanh(),
-            nn.Linear(64, 4),
-        )
-
-    def forward(self, observation):
-        return self.network(observation)
-
-    def sample_action(self, observation):
-        observation = torch.as_tensor(observation, dtype=torch.float32)
-        distribution = Categorical(logits=self(observation))
-        action = distribution.sample()
-        return int(action.item()), distribution.log_prob(action)
+from common import plot_training_curve
+from model import SimpleActorPolicy
 
 
 env = gym.make("LunarLander-v3")
-policy = CartPolePolicy()
+policy = SimpleActorPolicy()
 optimizer = torch.optim.Adam(policy.parameters(), lr=1e-2)
 
 NUM_EPOCHS = 10000
 BATCH_SIZE = 1024
 epoch_rewards = []
-
-def plot_rewards(epoch_rewards):
-    plt.plot(range(len(epoch_rewards)), epoch_rewards)
-    plt.xlabel("Epoch")
-    plt.ylabel("Reward")
-    plt.title("CartPole Reward per Epoch")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig("reward_per_epoch.png", dpi=150)
-    plt.close()
 
 for epoch in range(NUM_EPOCHS):
     batch_log_probs = []
@@ -97,6 +66,6 @@ for epoch in range(NUM_EPOCHS):
     if epoch % (NUM_EPOCHS // 100) == 0:
         print(f"Epoch {epoch}, loss: {loss.item()}")
         print(f"Episode reward: {sum(episode_rewards) / len(episode_rewards)}")
-        plot_rewards(epoch_rewards)
+        plot_training_curve(epoch_rewards, save_path="plots/reinforce.png")
 
 env.close()

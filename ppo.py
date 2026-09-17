@@ -7,6 +7,9 @@ from torch.distributions import Categorical
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
 CLIP_EPS = 0.2
+PPO_EPOCHS = 4
+MINIBATCH_SIZE = 512
+ENTROPY_COEF = 0.01
 
 def init_layer(layer, std=1.0):
     nn.init.orthogonal_(layer.weight, gain=std)
@@ -51,20 +54,21 @@ class CartPolePolicy(nn.Module):
         action = distribution.sample()
         return int(action.item()), distribution.log_prob(action), value
 
-    def get_log_prob(self, observation, actions):
-        policy_logits, _ = self(observation)
-        log_probs = Categorical(logits=policy_logits).log_prob(actions)
-        return log_probs
+    def evaluate(self, observations, actions):
+        logits, values = self(observations)
+        distribution = Categorical(logits=logits)
+        log_probs = distribution.log_prob(actions.long())
+        entropy = distribution.entropy()
+        return log_probs, values.squeeze(-1), entropy
 
 
 env = gym.make("LunarLander-v3")
 policy = CartPolePolicy()
 
-optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(policy.parameters(), lr=3e-4)
 
 NUM_EPOCHS = 10000
 BATCH_SIZE = 4096
-k = 1
 
 epoch_rewards = []
 epoch_explained_variances = []
@@ -130,16 +134,6 @@ def compute_gae(rewards, values, gamma=0.99, lam=0.95):
 
     return advantages
 
-def evaluate(self, observations, actions):
-    logits, values = self(observations)
-
-    distribution = Categorical(logits=logits)
-
-    log_probs = distribution.log_prob(actions)
-    entropy = distribution.entropy()
-
-    return log_probs, values.squeeze(-1), entropy
-
 for epoch in range(NUM_EPOCHS):
     batch_log_probs = []
     batch_values = []
@@ -163,7 +157,7 @@ for epoch in range(NUM_EPOCHS):
         terminated = truncated = False
 
         while not (terminated or truncated):
-            observations.append(torch.from_numpy(observation))
+            observations.append(torch.as_tensor(observation, dtype=torch.float32))
 
             action, log_prob, value = policy.sample_action(observation)
 
@@ -172,7 +166,7 @@ for epoch in range(NUM_EPOCHS):
             log_probs.append(log_prob)
             rewards.append(reward)
             values.append(value.squeeze())
-            actions.append(torch.Tensor(action)) # TODO?
+            actions.append(torch.tensor(action, dtype=torch.long))
 
             num_steps += 1
 
@@ -196,14 +190,13 @@ for epoch in range(NUM_EPOCHS):
 
         episode_rewards.append(sum(rewards))
 
-    log_probs = torch.stack(batch_log_probs).detach() # TODO?
-    advantages = torch.stack(batch_advantages)
+    old_log_probs = torch.stack(batch_log_probs).detach()
+    advantages = torch.stack(batch_advantages).detach()
     values = torch.stack(batch_values)
-    value_targets = torch.stack(batch_value_targets)
+    value_targets = torch.stack(batch_value_targets).detach()
     explained_variance = compute_explained_variance(values.detach(), value_targets)
 
     observations = torch.stack(batch_observations)
-
     actions = torch.stack(batch_actions)
 
     advantages = (
@@ -212,53 +205,64 @@ for epoch in range(NUM_EPOCHS):
         advantages.std() + 1e-8
     )
 
-    bs = BATCH_SIZE // k
-    for i in range(k):
-        mb_log_probs = log_probs[bs * i : bs * (i + 1)]
-        mb_values = values[bs * i : bs * (i + 1)]
-        mb_value_targets = value_targets[bs * i : bs * (i + 1)]
-        mb_advantages = advantages[bs * i : bs * (i + 1)]
+    N = len(actions)
 
-        mb_actions = actions[bs * i : bs * (i + 1)]
-        mb_observations = observations[bs * i : bs * (i + 1)]
+    for ppo_epoch in range(PPO_EPOCHS):
+        indices = torch.randperm(N)
 
-        new_log_probs, new_values, entropy = policy.evaluate(
-            mb_observations,
-            mb_actions,
-        )
+        for start in range(0, N, MINIBATCH_SIZE):
+            mb_indices = indices[start:start + MINIBATCH_SIZE]
 
-        ratio = torch.exp(new_log_probs - mb_log_probs)
+            mb_old_log_probs = old_log_probs[mb_indices]
+            mb_value_targets = value_targets[mb_indices]
+            mb_advantages = advantages[mb_indices]
+            mb_actions = actions[mb_indices]
+            mb_observations = observations[mb_indices]
 
-        surrogate1 = ratio * mb_advantages
-
-        surrogate2 = (
-            torch.clamp(
-                ratio,
-                1.0 - CLIP_EPS,
-                1.0 + CLIP_EPS,
+            new_log_probs, new_values, entropy = policy.evaluate(
+                mb_observations,
+                mb_actions,
             )
-            * mb_advantages
-        )
 
-        policy_loss = -torch.min(
-            surrogate1,
-            surrogate2,
-        ).mean()
+            ratio = torch.exp(
+                new_log_probs - mb_old_log_probs
+            )
 
-        value_loss = ((new_values - value_targets) ** 2).mean()
+            surrogate1 = ratio * mb_advantages
 
-        loss = policy_loss + 0.5 * value_loss
+            surrogate2 = (
+                torch.clamp(
+                    ratio,
+                    1.0 - CLIP_EPS,
+                    1.0 + CLIP_EPS,
+                )
+                * mb_advantages
+            )
 
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(policy.parameters(), 0.5)
-        optimizer.step()
+            policy_loss = -torch.min(
+                surrogate1,
+                surrogate2,
+            ).mean()
+
+            value_loss = (
+                (new_values - mb_value_targets) ** 2
+            ).mean()
+
+            entropy_loss = entropy.mean()
+            loss = policy_loss + 0.5 * value_loss - ENTROPY_COEF * entropy_loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                policy.parameters(), 0.5
+            )
+            optimizer.step()
 
     epoch_rewards.append(sum(episode_rewards) / len(episode_rewards))
     epoch_explained_variances.append(explained_variance)
 
     if epoch % (NUM_EPOCHS // 100) == 0:
-        print(f"Epoch {epoch}, policy loss: {policy_loss.item():.3f}, value loss: {value_loss.item():.3f}")
+        print(f"Epoch {epoch}, policy loss: {policy_loss.item():.3f}, value loss: {value_loss.item():.3f}, entropy_loss: {entropy_loss.item():.3f}")
         print(f"Episode reward: {sum(episode_rewards) / len(episode_rewards)}")
         print(f"Explained variance: {explained_variance:.3f}")
         plot_rewards(epoch_rewards, epoch_explained_variances)
